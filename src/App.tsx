@@ -92,61 +92,58 @@ const App: React.FC = () => {
   }, [user, isAdminMode]);
 
   const handleSendMessage = async (text: string) => {
-    const userMessage: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      text,
+  // Push user message immediately
+  const userMessage: ChatMessage = {
+    id: Date.now().toString(),
+    role: 'user',
+    text,
+    timestamp: Date.now(),
+  };
+  setMessages(prev => [...prev, userMessage]);
+
+  setIsThinking(true);   // disable input + show thinking state
+
+  try {
+    // ALWAYS await backend properly
+    const data = await sendMessageToGemini(text);
+
+    // Add model reply
+    const modelMessage: ChatMessage = {
+      id: (Date.now() + 1).toString(),
+      role: 'model',
+      data,
       timestamp: Date.now(),
     };
+    setMessages(prev => [...prev, modelMessage]);
 
-    setMessages((prev) => [...prev, userMessage]);
-    setIsThinking(true);
-
-    try {
-      // Pass vocabulary to the service
-      const data = await sendMessageToGemini(text);
-      
-      const modelMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'model',
-        data,
-        timestamp: Date.now(),
-      };
-      
-      setMessages((prev) => [...prev, modelMessage]);
-
-      // Save to Firestore
-      if (db) {
-         try {
-           const conversationId = userMessage.id; 
-           await addDoc(collection(db, 'conversations'), {
-             sessionId: conversationId, 
-             input: text,
-             response: data, 
-             timestamp: serverTimestamp(),
-             metadata: {
-               client: 'web_v6',
-               hasVocabularyContext: approvedVocabulary.length > 0
-             }
-           });
-         } catch (saveError) {
-           console.error("Failed to save conversation history:", saveError);
-         }
-       }
-
-    } catch (error) {
-      console.error("Failed to get response", error);
-      const errorMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'model',
-        timestamp: Date.now(),
-        isError: true
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setIsThinking(false);
+    // Save to DB (safe optional)
+    if (db) {
+      await addDoc(collection(db, 'conversations'), {
+        sessionId: userMessage.id,
+        input: text,
+        response: data,
+        timestamp: serverTimestamp(),
+      });
     }
-  };
+
+  } catch (error) {
+    console.error("Failed to get response", error);
+    setMessages(prev => [
+      ...prev,
+      {
+        id: (Date.now() + 1).toString(),
+        role: 'model',
+        isError: true,
+        timestamp: Date.now()
+      }
+    ]);
+  } finally {
+    // 🔥🔥 THE IMPORTANT FIX 🔥🔥
+    setTimeout(() => {
+      setIsThinking(false);     // Re-enable ChatInput
+    }, 50);
+  }
+};
 
   const handleOpenSuggestion = (modelMessage: ChatMessage) => {
     const index = messages.findIndex(m => m.id === modelMessage.id);
